@@ -9,6 +9,11 @@ class PropertyModel;
 class AlarmLogModel;
 class AlarmFilterProxy;
 class AlarmSimulator;
+class CommManager;
+class DeviceMonitor;
+class DevicePanel;
+class HistoryManager;
+enum class LinkState;
 class QUndoStack;
 class QLabel;
 class QActionGroup;
@@ -41,6 +46,10 @@ private:
     void updateStats();
     void showAbout();
     void showHelp();
+    void startDemo();
+    void onLinkStateChanged(LinkState state);
+    void afterRebuild();
+    QList<int> virtualDeviceIds() const;
 
     QUndoStack *m_undo;
     TopologyScene *m_scene;
@@ -50,6 +59,10 @@ private:
     AlarmLogModel *m_alarmLog = nullptr;
     AlarmFilterProxy *m_alarmProxy = nullptr;
     AlarmSimulator *m_sim;
+    CommManager *m_comm = nullptr;
+    DeviceMonitor *m_monitor = nullptr;
+    DevicePanel *m_devicePanel = nullptr;
+    HistoryManager *m_history = nullptr;
 
     QActionGroup *m_modeGroup = nullptr;
     QComboBox *m_typeCombo = nullptr;
@@ -60,4 +73,5 @@ private:
     QLabel *m_statStatus = nullptr;
     QLabel *m_statZoom = nullptr;
     QLabel *m_statFrame = nullptr;
+    QLabel *m_statLink = nullptr;
 };

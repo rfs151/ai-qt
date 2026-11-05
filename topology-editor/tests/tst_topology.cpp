@@ -10,6 +10,9 @@
 #include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QtTest>
+#include <QComboBox>
+#include <QPushButton>
+#include <QTabWidget>
 #include <QUndoStack>
 
 class TestTopology : public QObject
@@ -174,6 +177,42 @@ private slots:
         w.show();
         QTest::qWait(400);
         QVERIFY(w.grab().save(QStringLiteral(SCREENSHOT_DIR "/screenshot-sample.png")));
+
+        // 设备面板的仪表盘页和历史查询页
+        QTabWidget *tabs = nullptr;
+        for (QTabWidget *t : w.findChildren<QTabWidget *>())
+            if (t->count() > 0 && t->tabText(0) == QStringLiteral("实时曲线"))
+                tabs = t;
+        QVERIFY(tabs);
+        QTest::qWait(3000);
+        QVERIFY(w.grab().save(QStringLiteral(SCREENSHOT_DIR "/screenshot-curves.png")));
+        tabs->setCurrentIndex(1);
+        QTest::qWait(1200);
+        QVERIFY(w.grab().save(QStringLiteral(SCREENSHOT_DIR "/screenshot-gauges.png")));
+        tabs->setCurrentIndex(tabs->count() - 1);
+        for (QPushButton *b : w.findChildren<QPushButton *>())
+            if (b->text() == QStringLiteral("查询"))
+                b->click();
+        QTest::qWait(800);
+        QVERIFY(w.grab().save(QStringLiteral(SCREENSHOT_DIR "/screenshot-history.png")));
+        // 切到 Modbus 协议重连，看寄存器页
+        QPushButton *connectBtn = nullptr;
+        for (QPushButton *b : w.findChildren<QPushButton *>())
+            if (b->text() == QStringLiteral("断开"))
+                connectBtn = b;
+        QVERIFY(connectBtn);
+        connectBtn->click();
+        QTest::qWait(300);
+        for (QComboBox *c : w.findChildren<QComboBox *>())
+            if (c->count() == 2 && c->itemText(1) == QStringLiteral("Modbus"))
+                c->setCurrentIndex(1);
+        connectBtn->click();
+        for (int i = 0; i < tabs->count(); ++i)
+            if (tabs->tabText(i) == QStringLiteral("寄存器"))
+                tabs->setCurrentIndex(i);
+        QTest::qWait(2500);
+        QVERIFY(w.grab().save(QStringLiteral(SCREENSHOT_DIR "/screenshot-modbus.png")));
+        tabs->setCurrentIndex(0);
 
         // 开启告警模拟一段时间后再截一张
         for (QAction *a : w.findChildren<QAction *>())

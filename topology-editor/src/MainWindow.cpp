@@ -1,6 +1,9 @@
 #include "MainWindow.h"
+#include "comm/CommManager.h"
 #include "commands/Commands.h"
 #include "io/TopologyIO.h"
+#include "history/HistoryDb.h"
+#include "monitor/DeviceMonitor.h"
 #include "model/AlarmLogModel.h"
 #include "model/PropertyDelegate.h"
 #include "model/PropertyModel.h"
@@ -10,6 +13,7 @@
 #include "scene/TopologyScene.h"
 #include "scene/TopologyView.h"
 #include "sim/AlarmSimulator.h"
+#include "widgets/DevicePanel.h"
 
 #include <QActionGroup>
 #include <QApplication>
@@ -42,9 +46,13 @@ MainWindow::MainWindow(QWidget *parent)
       m_view(new TopologyView(m_scene, this)),
       m_sim(new AlarmSimulator(m_scene, this))
 {
-    setWindowTitle(QStringLiteral("网络拓扑编辑器 · Qt Graphics View 演示"));
+    setWindowTitle(QStringLiteral("网络拓扑监控 · Qt 上位机演示"));
     m_undo->setUndoLimit(500);
     setCentralWidget(m_view);
+
+    m_comm = new CommManager(this);
+    m_monitor = new DeviceMonitor(m_scene, this);
+    m_history = new HistoryManager(HistoryManager::defaultPath(), this);
 
     createActions();
     createDocks();
@@ -59,8 +67,19 @@ MainWindow::MainWindow(QWidget *parent)
     connect(statsTimer, &QTimer::timeout, this, &MainWindow::updateStats);
     statsTimer->start(500);
 
-    resize(1400, 860);
-    QTimer::singleShot(0, this, &MainWindow::loadSample);
+    connect(m_comm, &CommManager::samplesReady, m_monitor, &DeviceMonitor::onSamples);
+    connect(m_comm, &CommManager::samplesReady, m_history, &HistoryManager::appendSamples);
+    connect(m_monitor, &DeviceMonitor::alarmEvents, m_history, [this](const QVector<AlarmEvent> &events) {
+        QVector<HistoryAlarm> rows;
+        rows.reserve(events.size());
+        for (const AlarmEvent &e : events)
+            rows.append({e.time.toMSecsSinceEpoch(), e.nodeId, e.nodeName, int(e.level), e.text});
+        m_history->appendAlarms(rows);
+    });
+    connect(m_comm, &CommManager::stateChanged, this, &MainWindow::onLinkStateChanged);
+
+    resize(1400, 900);
+    QTimer::singleShot(0, this, &MainWindow::startDemo);
 }
 
 // ---------------------------------------------------------------- 动作/菜单
@@ -300,12 +319,22 @@ void MainWindow::createDocks()
     addDockWidget(Qt::BottomDockWidgetArea, alarmDock);
 
     connect(m_sim, &AlarmSimulator::events, m_alarmLog, &AlarmLogModel::append);
+    connect(m_monitor, &DeviceMonitor::alarmEvents, m_alarmLog, &AlarmLogModel::append);
+
+    // 设备通信：和告警日志并排放在底部
+    m_devicePanel = new DevicePanel(m_comm, m_monitor, m_history);
+    m_devicePanel->setDeviceIdProvider([this] { return virtualDeviceIds(); });
+    auto *deviceDock = new QDockWidget(QStringLiteral("设备通信"), this);
+    deviceDock->setWidget(m_devicePanel);
+    addDockWidget(Qt::BottomDockWidgetArea, deviceDock);
+    splitDockWidget(alarmDock, deviceDock, Qt::Horizontal);
 
     resizeDocks({propDock, mapDock}, {360, 220}, Qt::Vertical);
     resizeDocks({propDock}, {300}, Qt::Horizontal);
-    resizeDocks({alarmDock}, {200}, Qt::Vertical);
+    resizeDocks({alarmDock}, {330}, Qt::Vertical);
+    resizeDocks({alarmDock, deviceDock}, {480, 920}, Qt::Horizontal);
 
-    for (QDockWidget *d : {propDock, undoDock, mapDock, alarmDock})
+    for (QDockWidget *d : {propDock, undoDock, mapDock, alarmDock, deviceDock})
         m_viewMenu->addAction(d->toggleViewAction());
 }
 
@@ -316,7 +345,9 @@ void MainWindow::createStatusBar()
     m_statZoom = new QLabel;
     m_statFrame = new QLabel;
     m_statFrame->setToolTip(QStringLiteral("主视图最近若干帧的平均渲染耗时"));
-    for (QLabel *l : {m_statCount, m_statStatus, m_statZoom, m_statFrame}) {
+    m_statLink = new QLabel;
+    m_statLink->setToolTip(QStringLiteral("3 秒内收到过数据的设备数"));
+    for (QLabel *l : {m_statLink, m_statCount, m_statStatus, m_statZoom, m_statFrame}) {
         l->setContentsMargins(8, 0, 8, 0);
         statusBar()->addPermanentWidget(l);
     }
@@ -329,6 +360,50 @@ void MainWindow::resetForRebuild()
     // 顺序很重要：先清撤销栈（释放被命令持有的图元），再清场景
     m_props->setNode(nullptr);
     m_undo->clear();
+    m_monitor->reset(false);   // 节点马上要被清掉，不必恢复颜色
+}
+
+void MainWindow::afterRebuild()
+{
+    // 虚拟设备按拓扑生成，拓扑换了就用新的设备列表重连
+    m_devicePanel->restartIfVirtual();
+}
+
+QList<int> MainWindow::virtualDeviceIds() const
+{
+    // 云节点不是被管设备；上万节点压测时只模拟前 300 台，避免数据量失控
+    QList<int> ids;
+    for (NodeItem *n : m_scene->nodes())
+        if (n->nodeType() != NodeType::Cloud)
+            ids << n->id();
+    std::sort(ids.begin(), ids.end());
+    if (ids.size() > 300)
+        ids.resize(300);
+    return ids;
+}
+
+void MainWindow::startDemo()
+{
+    loadSample();
+    m_devicePanel->connectVirtual();
+    // 默认选中一台核心设备，打开页面就能看到实时曲线
+    for (NodeItem *n : m_scene->nodes()) {
+        if (n->nodeType() == NodeType::Router) {
+            n->setSelected(true);
+            break;
+        }
+    }
+}
+
+void MainWindow::onLinkStateChanged(LinkState state)
+{
+    // 链路接通后节点状态由真实数据驱动，随机告警模拟让位
+    const bool active = state != LinkState::Disconnected;
+    if (active && m_simAction->isChecked())
+        m_simAction->setChecked(false);
+    m_simAction->setEnabled(!active);
+    m_simAction->setToolTip(active ? QStringLiteral("设备链路已连接，告警由实时数据驱动；断开链路后可用")
+                                   : QStringLiteral("随机改变节点状态（不经过通信链路）"));
 }
 
 void MainWindow::newTopology()
@@ -338,6 +413,7 @@ void MainWindow::newTopology()
     m_alarmLog->clear();
     m_view->resetZoom();
     m_view->centerOn(0, 0);
+    afterRebuild();
 }
 
 void MainWindow::openTopology()
@@ -398,6 +474,7 @@ void MainWindow::loadBytes(const QByteArray &data, const QString &source)
     }
     m_alarmLog->clear();
     m_view->fitAll();
+    afterRebuild();
     statusBar()->showMessage(QStringLiteral("已加载 %1：%2 个节点").arg(source).arg(m_scene->nodes().size()), 4000);
 }
 
@@ -407,6 +484,7 @@ void MainWindow::loadSample()
     TopologyIO::buildSampleCampus(m_scene);
     m_alarmLog->clear();
     m_view->fitAll();
+    afterRebuild();
 }
 
 void MainWindow::runStressTest(int count)
@@ -418,6 +496,7 @@ void MainWindow::runStressTest(int count)
     TopologyIO::buildStressGrid(m_scene, count);
     const qint64 buildMs = t.elapsed();
     m_view->fitAll();
+    afterRebuild();
     statusBar()->showMessage(QStringLiteral("已生成 %1 个节点、%2 条连线，用时 %3 ms。滚轮放大可看到 LOD 切换。")
                                  .arg(m_scene->nodes().size())
                                  .arg(m_scene->edges().size())
@@ -470,6 +549,8 @@ void MainWindow::onSelectionChanged()
 {
     const auto nodes = m_scene->selectedNodes();
     m_props->setNode(nodes.size() == 1 ? nodes.first() : nullptr);
+    if (nodes.size() == 1)
+        m_devicePanel->setCurrentDevice(nodes.first()->id(), nodes.first()->name());
 }
 
 void MainWindow::locateNode(int id)
@@ -499,7 +580,14 @@ void MainWindow::updateStats()
                               .arg(m_scene->statusCount(NodeStatus::Offline)));
     m_statZoom->setText(QStringLiteral("缩放 %1%").arg(qRound(m_view->zoom() * 100)));
     m_statFrame->setText(QStringLiteral("渲染 %1 ms/帧").arg(m_view->averageFrameMs(), 0, 'f', 1));
-    if (m_sim->isRunning())
+    if (m_comm->state() == LinkState::Connected) {
+        const int monitored = int(virtualDeviceIds().size());
+        m_statLink->setText(QStringLiteral("在线设备 %1").arg(m_monitor->onlineCount()) +
+                            (m_comm->kind() == LinkConfig::Virtual ? QStringLiteral("/%1").arg(monitored) : QString()));
+    } else {
+        m_statLink->setText(QStringLiteral("链路未连接"));
+    }
+    if (m_sim->isRunning() || m_comm->state() == LinkState::Connected)
         m_props->refresh();
 }
 
@@ -515,7 +603,11 @@ void MainWindow::showHelp()
         "<b>模式</b>：S 选择 · A 添加节点（点空白处）· C 连线（从一个节点拖到另一个）<br>"
         "<b>视图</b>：滚轮缩放 · 中键或 Alt+左键拖动平移 · F 适应窗口 · 1 原始大小<br>"
         "<b>编辑</b>：框选 · 方向键微调（Shift 加速）· Delete 删除 · Ctrl+Z / Ctrl+Y<br>"
-        "<b>监控</b>：空格开关告警模拟 · 双击告警日志定位节点<br>"
+        "<b>设备通信</b>：启动后自动连接应用内虚拟设备；选中节点查看实时曲线 · "
+        "曲线上滚轮缩放、拖动平移、双击回到实时 · 可注入分包/误码/丢应答/断线故障 · "
+        "参数下发页可改设备负载触发告警 · 仪表盘显示选中设备实时读数 · "
+        "历史查询页从 SQLite 回放曲线、查看告警、导出 CSV · 桌面版可通过 TCP/串口连接独立模拟器 devsim<br>"
+        "<b>监控</b>：断开链路后，空格开关随机告警模拟 · 双击告警日志定位节点<br>"
         "<b>性能</b>：压力测试生成上万节点，开关 LOD / BSP 对比状态栏里的单帧耗时"));
     box->open();
 }
@@ -526,8 +618,8 @@ void MainWindow::showAbout()
     box->setAttribute(Qt::WA_DeleteOnClose);
     box->setWindowTitle(QStringLiteral("关于"));
     box->setTextFormat(Qt::RichText);
-    box->setText(QStringLiteral("<h3>网络拓扑编辑器</h3>"
-                                "<p>C++17 · Qt %1 · Graphics View Framework</p>"
+    box->setText(QStringLiteral("<h3>网络拓扑监控</h3>"
+                                "<p>C++17 · Qt %1 · Graphics View · Model/View · QThread · 自定义协议 · SQLite</p>"
                                 "<p>同一套代码编译桌面版与 WebAssembly 版。</p>")
                      .arg(QString::fromLatin1(qVersion())));
     box->open();
