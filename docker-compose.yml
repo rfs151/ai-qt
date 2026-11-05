@@ -1,0 +1,26 @@
+# 只用 HTTP：            docker compose up -d
+# 加 HTTPS（需要域名）：  docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+services:
+  web:
+    image: ${IMAGE:-qt-showcase:latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      network: host           # 让构建过程能使用宿主机代理
+      args:
+        REGISTRY: ${REGISTRY:-docker.io}
+        AQT_BASE: ${AQT_BASE:-https://download.qt.io}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

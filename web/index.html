@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Qt / C++ 作品集</title>
+    <meta name="description" content="C++ / Qt Widgets / Graphics View 作品集，可在浏览器中直接运行的 Qt WebAssembly 演示">
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="hero">
+    <div class="wrap">
+        <!-- TODO: 换成自己的姓名和定位 -->
+        <h1>你的名字</h1>
+        <p class="role">C++ / Qt 桌面与图形软件开发 · 12 年架构经验</p>
+        <ul class="tags">
+            <li>C++17</li><li>Qt Widgets</li><li>Graphics View</li><li>Model/View</li>
+            <li>QPainter 自绘</li><li>Undo 框架</li><li>WebAssembly</li><li>CMake</li>
+        </ul>
+    </div>
+</header>
+
+<main class="wrap">
+    <section id="projects">
+        <h2>可在线运行的项目</h2>
+        <article class="project">
+            <div>
+                <h3>网络拓扑编辑器 / 监控台</h3>
+                <p class="sub">Qt 6 · Graphics View · 同一套代码编译桌面版和 WebAssembly 版</p>
+                <p>
+                    节点拖拽、连线、框选、对齐、撤销重做，属性面板直接编辑，
+                    告警模拟实时闪烁，鸟瞰图导航，JSON 导入导出。
+                    内置压力测试：一键生成 <b>20000 个节点</b>，可以开关 LOD 和 BSP 索引对比单帧耗时。
+                </p>
+                <div class="actions">
+                    <a class="btn primary" href="demo/topology/">在浏览器中打开 →</a>
+                </div>
+            </div>
+            <div class="preview" aria-hidden="true">
+                <svg viewBox="0 0 400 260" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <pattern id="g" width="20" height="20" patternUnits="userSpaceOnUse">
+                            <path d="M20 0H0V20" fill="none" stroke="#e3e6eb" stroke-width="1"/>
+                        </pattern>
+                    </defs>
+                    <rect width="400" height="260" fill="url(#g)"/>
+                    <g stroke="#5b8db8" stroke-width="2">
+                        <line x1="200" y1="40" x2="110" y2="110"/><line x1="200" y1="40" x2="290" y2="110"/>
+                        <line x1="110" y1="110" x2="290" y2="110"/>
+                        <line x1="110" y1="110" x2="60" y2="190"/><line x1="110" y1="110" x2="160" y2="190"/>
+                        <line x1="290" y1="110" x2="240" y2="190" stroke="#e09b10" stroke-width="3"/>
+                        <line x1="290" y1="110" x2="340" y2="190" stroke="#d93025" stroke-width="3.5"/>
+                    </g>
+                    <g stroke-width="2" fill="#fff">
+                        <rect x="184" y="24" width="32" height="32" rx="6" stroke="#2ea043"/>
+                        <rect x="94" y="94" width="32" height="32" rx="6" stroke="#2ea043"/>
+                        <rect x="274" y="94" width="32" height="32" rx="6" stroke="#e09b10"/>
+                        <rect x="44" y="174" width="32" height="32" rx="6" stroke="#2ea043"/>
+                        <rect x="144" y="174" width="32" height="32" rx="6" stroke="#2ea043"/>
+                        <rect x="224" y="174" width="32" height="32" rx="6" stroke="#2ea043"/>
+                        <rect x="324" y="174" width="32" height="32" rx="6" stroke="#d93025"/>
+                    </g>
+                    <g fill="#2ea043">
+                        <circle cx="212" cy="28" r="4"/><circle cx="122" cy="98" r="4"/>
+                        <circle cx="72" cy="178" r="4"/><circle cx="172" cy="178" r="4"/><circle cx="252" cy="178" r="4"/>
+                        <circle cx="302" cy="98" r="4" fill="#e09b10"/><circle cx="352" cy="178" r="4" fill="#d93025"/>
+                    </g>
+                    <rect x="230" y="150" width="140" height="80" fill="#1e6fd9" fill-opacity=".08" stroke="#1e6fd9" stroke-dasharray="4 3"/>
+                </svg>
+            </div>
+        </article>
+    </section>
+
+    <section id="highlights">
+        <h2>技术要点</h2>
+        <div class="points">
+            <div class="point">
+                <h4>两万节点保持流畅</h4>
+                <ul>
+                    <li><code>BspTreeIndex</code> 场景索引 + 视口裁剪，只绘制可见图元</li>
+                    <li><code>levelOfDetailFromTransform</code> 三级 LOD：缩小后节点退化为色块，不画文字和图标</li>
+                    <li>节点不继承 <code>QObject</code>，每个节点省下信号槽的内存开销</li>
+                    <li>视图开启 <code>DontSavePainterState</code>，图元自己保证画笔状态</li>
+                </ul>
+            </div>
+            <div class="point">
+                <h4>局部刷新而不是整屏重绘</h4>
+                <ul>
+                    <li>告警闪烁由场景里唯一的定时器驱动，只刷新告警节点</li>
+                    <li>节点移动时只调整与它相连的连线（<code>ItemPositionHasChanged</code>）</li>
+                    <li>鸟瞰图共享同一个 scene，<code>NoViewportUpdate</code> + 标脏后定时刷新</li>
+                    <li>告警日志按周期批量插入，一次 <code>beginInsertRows</code></li>
+                </ul>
+            </div>
+            <div class="point">
+                <h4>完整的撤销重做</h4>
+                <ul>
+                    <li>添加、删除、移动、连线、改属性、对齐全部走 <code>QUndoStack</code></li>
+                    <li>删除节点时连带记录相关连线，撤销后完整恢复</li>
+                    <li>方向键微调用 <code>mergeWith</code> 合并成一条命令</li>
+                    <li>明确图元所有权规则，撤销栈析构时不会重复释放</li>
+                </ul>
+            </div>
+            <div class="point">
+                <h4>Model/View</h4>
+                <ul>
+                    <li>属性面板：自定义 <code>QAbstractTableModel</code> + Delegate，按属性类型创建下拉框/数值框/带校验的输入框</li>
+                    <li>编辑结果生成撤销命令，而不是直接改数据</li>
+                    <li>告警日志：<code>QSortFilterProxyModel</code> 按级别和关键字过滤，双击定位节点</li>
+                </ul>
+            </div>
+            <div class="point">
+                <h4>一套代码，桌面 + Web</h4>
+                <ul>
+                    <li>平台差异只在文件读写，用 <code>#ifdef Q_OS_WASM</code> 隔离</li>
+                    <li>Web 版用 <code>getOpenFileContent</code> / <code>saveFileContent</code> 读写本地文件</li>
+                    <li>不使用 <code>exec()</code> 模态循环，对话框全部用 <code>open()</code></li>
+                    <li>中文字体子集打包进 qrc（约 800KB），解决 WASM 无系统字体的问题</li>
+                </ul>
+            </div>
+            <div class="point">
+                <h4>工程化与部署</h4>
+                <ul>
+                    <li>多阶段 Dockerfile：emsdk + Qt 工具链 → 编译 → nginx</li>
+                    <li>wasm 构建时 gzip 预压缩，nginx <code>gzip_static</code> 直接发送</li>
+                    <li>docker compose 部署，可叠加 Caddy 自动 HTTPS</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section id="stack">
+        <h2>技术栈</h2>
+        <div class="stack">
+            <div><b>语言</b><span>C++17、CMake</span></div>
+            <div><b>框架</b><span>Qt 6.8 LTS：Widgets、Graphics View、Model/View、Undo</span></div>
+            <div><b>平台</b><span>Windows / Linux 桌面，浏览器（WebAssembly）</span></div>
+        </div>
+    </section>
+</main>
+
+<footer>
+    <div class="wrap">
+        <!-- TODO: 换成自己的联系方式 -->
+        联系方式：your@email.com · 页面中的演示程序为 Qt 编译到 WebAssembly 后在浏览器本地运行，不依赖后端服务。
+    </div>
+</footer>
+</body>
+</html>

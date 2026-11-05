@@ -1,0 +1,4 @@
+# 自动申请/续期 Let's Encrypt 证书。DOMAIN 来自 .env，域名需先解析到 VPS。
+{$DOMAIN} {
+    reverse_proxy web:80
+}

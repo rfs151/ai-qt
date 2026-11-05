@@ -1,0 +1,24 @@
+# 叠加在 docker-compose.yml 之上：web 不再直接暴露端口，由 Caddy 负责 80/443 和证书
+services:
+  web:
+    ports: !reset []
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2.9-alpine}
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?请在 .env 中设置 DOMAIN}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

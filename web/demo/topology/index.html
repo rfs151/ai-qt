@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- 未压缩的 wasm 字节数，构建时由脚本替换。服务器发送的是 gzip 版，浏览器拿不到解压后的总大小 -->
+    <meta name="wasm-size" content="__WASM_SIZE__">
+    <title>网络拓扑编辑器 · Qt WebAssembly</title>
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #f6f7f9; }
+        body {
+            display: flex; flex-direction: column;
+            font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            color: #1f2430;
+        }
+        .bar {
+            flex: none; display: flex; align-items: center; gap: 16px;
+            height: 40px; padding: 0 16px; background: #fff; border-bottom: 1px solid #e3e6eb;
+        }
+        .bar a { color: #1e6fd9; text-decoration: none; }
+        .bar .title { font-weight: 600; }
+        .bar .tip { color: #5b6474; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #screen { flex: 1; position: relative; min-height: 0; }
+        #loading {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px; color: #5b6474;
+        }
+        .spinner {
+            width: 36px; height: 36px; border-radius: 50%;
+            border: 3px solid #dfe5ee; border-top-color: #1e6fd9; animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .progress {
+            width: min(360px, 80vw); height: 6px; border-radius: 3px; background: #dfe5ee; overflow: hidden;
+        }
+        .progress .fill { width: 0; height: 100%; background: #1e6fd9; transition: width 0.15s; }
+        .progress.indeterminate .fill { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+        @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+        #percent { font-variant-numeric: tabular-nums; color: #1f2430; }
+        .note { font-size: 12px; color: #8a93a3; }
+        #loading.error .spinner, #loading.error .progress, #loading.error .note { display: none; }
+        #loading.error { color: #d93025; }
+        @media (max-width: 760px) { .bar .tip { display: none; } }
+    </style>
+</head>
+<body>
+<div class="bar">
+    <a href="../../">← 返回作品集</a>
+    <span class="title">网络拓扑编辑器</span>
+    <span class="tip">滚轮缩放 · 中键/Alt+左键平移 · 空格开关告警模拟 · F1 操作说明 · 菜单“监控 → 压力测试”生成上万节点</span>
+</div>
+<div id="screen">
+    <div id="loading">
+        <div class="spinner"></div>
+        <div id="status">正在加载 Qt 程序… <span id="percent"></span></div>
+        <div class="progress"><div class="fill"></div></div>
+        <div class="note">C++ 编译为 WebAssembly，约 6MB，仅首次需要下载</div>
+    </div>
+</div>
+
+<script>
+    async function init() {
+        const screen = document.querySelector('#screen');
+        const loading = document.querySelector('#loading');
+        const status = document.querySelector('#status');
+        const percent = document.querySelector('#percent');
+        const bar = document.querySelector('.progress');
+        const fill = document.querySelector('.progress .fill');
+        const started = performance.now();
+
+        const fail = (text) => {
+            loading.classList.add('error');
+            loading.style.display = 'flex';
+            status.textContent = text;
+        };
+
+        // 自己下载 wasm 以便显示进度，编译好的模块通过 qt.module 交给 qtloader
+        const loadModule = async () => {
+            const response = await fetch('topology.wasm');
+            if (!response.ok)
+                throw new Error(`下载 topology.wasm 失败（HTTP ${response.status}）`);
+
+            const declared = Number(document.querySelector('meta[name="wasm-size"]').content);
+            const encoded = response.headers.get('Content-Encoding');
+            const total = encoded ? declared : Number(response.headers.get('Content-Length')) || declared;
+            if (!total || !response.body) {
+                bar.classList.add('indeterminate');
+                return WebAssembly.compile(await response.arrayBuffer());
+            }
+
+            const reader = response.body.getReader();
+            const bytes = new Uint8Array(total);
+            let received = 0;
+            let chunks = null;   // 实际大小超过预期时退回到分块拼接
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (!chunks && received + value.length <= total) {
+                    bytes.set(value, received);
+                } else {
+                    chunks ??= [bytes.subarray(0, received)];
+                    chunks.push(value);
+                }
+                received += value.length;
+                const pct = Math.min(100, Math.floor(received * 100 / total));
+                fill.style.width = pct + '%';
+                percent.textContent = pct + '%';
+            }
+
+            status.firstChild.textContent = '正在编译并启动… ';
+            percent.textContent = '';
+            fill.style.width = '100%';
+            let data = bytes.subarray(0, received);
+            if (chunks) {
+                data = new Uint8Array(received);
+                let offset = 0;
+                for (const c of chunks) { data.set(c, offset); offset += c.length; }
+            }
+            return WebAssembly.compile(data);
+        };
+
+        try {
+            await qtLoad({
+                qt: {
+                    module: loadModule(),
+                    containerElements: [screen],
+                    entryFunction: window.topology_entry,
+                    onLoaded: () => {
+                        loading.style.display = 'none';
+                        console.log(`Qt 启动耗时 ${(performance.now() - started).toFixed(0)} ms`);
+                    },
+                    onExit: (exitData) => {
+                        fail(`程序已退出${exitData.code !== undefined ? '，代码 ' + exitData.code : ''}` +
+                             `${exitData.text ? '（' + exitData.text + '）' : ''}`);
+                    },
+                },
+            });
+        } catch (e) {
+            console.error(e);
+            fail('加载失败：' + e.message + '。请使用最新版 Chrome / Edge / Firefox / Safari。');
+        }
+    }
+</script>
+<script src="topology.js"></script>
+<script src="qtloader.js" onload="init()"></script>
+</body>
+</html>
