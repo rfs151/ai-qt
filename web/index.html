@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Qt / C++ 作品集</title>
-    <meta name="description" content="C++ / Qt Widgets / Graphics View 作品集，可在浏览器中直接运行的 Qt WebAssembly 演示">
+    <meta name="description" content="C++ / Qt Widgets / Graphics View / Qt Quick 作品集，可在浏览器中直接运行的 Qt WebAssembly 演示">
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -14,7 +14,7 @@
         <h1>你的名字</h1>
         <p class="role">C++ / Qt 桌面与图形软件开发 · 12 年架构经验</p>
         <ul class="tags">
-            <li>C++17</li><li>Qt Widgets</li><li>Graphics View</li><li>Model/View</li>
+            <li>C++17</li><li>Qt Widgets</li><li>Qt Quick / QML</li><li>Graphics View</li><li>Model/View</li>
             <li>QPainter 自绘</li><li>Undo 框架</li><li>WebAssembly</li><li>CMake</li>
         </ul>
     </div>
@@ -26,11 +26,12 @@
         <article class="project">
             <div>
                 <h3>网络拓扑编辑器 / 监控台</h3>
-                <p class="sub">Qt 6 · Graphics View · 同一套代码编译桌面版和 WebAssembly 版</p>
+                <p class="sub">Qt 6 · Graphics View · Qt Quick · 同一套代码编译桌面版和 WebAssembly 版</p>
                 <p>
                     节点拖拽、连线、框选、对齐、撤销重做，属性面板直接编辑，
                     告警模拟实时闪烁，鸟瞰图导航，JSON 导入导出。
                     内置压力测试：一键生成 <b>20000 个节点</b>，可以开关 LOD 和 BSP 索引对比单帧耗时。
+                    按 <b>F10</b> 打开 Qt Quick 监控大屏。
                 </p>
                 <div class="actions">
                     <a class="btn primary" href="demo/topology/">在浏览器中打开 →</a>
@@ -110,6 +111,15 @@
                 </ul>
             </div>
             <div class="point">
+                <h4>Qt Quick 监控大屏</h4>
+                <ul>
+                    <li>QML 界面 + C++ 数据层：<code>QML_SINGLETON</code> 暴露数据门面，设备列表用 <code>QAbstractListModel</code></li>
+                    <li>趋势曲线是自定义 <code>QQuickItem</code>，直接生成 Scene Graph 几何体，线条羽化抗锯齿；无 GPU 时回退 QPainter</li>
+                    <li>环形仪表用 Shapes 的 <code>CurveRenderer</code>，GPU 解析绘制曲线</li>
+                    <li>编辑器（Widgets）和大屏（QML）共用同一份实时数据</li>
+                </ul>
+            </div>
+            <div class="point">
                 <h4>一套代码，桌面 + Web</h4>
                 <ul>
                     <li>平台差异只在文件读写，用 <code>#ifdef Q_OS_WASM</code> 隔离</li>
@@ -133,7 +143,7 @@
         <h2>技术栈</h2>
         <div class="stack">
             <div><b>语言</b><span>C++17、CMake</span></div>
-            <div><b>框架</b><span>Qt 6.8 LTS：Widgets、Graphics View、Model/View、Undo</span></div>
+            <div><b>框架</b><span>Qt 6.8 LTS：Widgets、Graphics View、Qt Quick / QML、Model/View、Undo</span></div>
             <div><b>平台</b><span>Windows / Linux 桌面，浏览器（WebAssembly）</span></div>
         </div>
     </section>

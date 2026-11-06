@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "comm/CommManager.h"
 #include "commands/Commands.h"
+#include "dashboard/DashboardBackend.h"
 #include "io/TopologyIO.h"
 #include "history/HistoryDb.h"
 #include "monitor/DeviceMonitor.h"
@@ -28,7 +29,10 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <QQuickView>
+#include <QScreen>
 #include <QTableView>
+#include <QtQml/qqmlextensionplugin.h>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -38,6 +42,9 @@
 #ifndef Q_OS_WASM
 #include <QFile>
 #endif
+
+// 大屏的 QML 模块编成了静态插件，需要显式导入
+Q_IMPORT_QML_PLUGIN(Topology_DashboardPlugin)
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -57,6 +64,27 @@ MainWindow::MainWindow(QWidget *parent)
     createActions();
     createDocks();
     createStatusBar();
+
+    // 大屏的数据门面一开始就创建，趋势曲线在后台持续采样，打开大屏就有两分钟历史
+    m_backend = new DashboardBackend(m_scene, m_monitor, m_comm, m_alarmLog, this);
+    auto countAlarms = [this](const QVector<AlarmEvent> &events) {
+        m_backend->countAlarmEvents(int(std::count_if(events.cbegin(), events.cend(), [](const AlarmEvent &e) {
+            return e.level == NodeStatus::Alarm;
+        })));
+    };
+    connect(m_monitor, &DeviceMonitor::alarmEvents, this, countAlarms);
+    connect(m_sim, &AlarmSimulator::events, this, countAlarms);
+    connect(m_backend, &DashboardBackend::backRequested, this, &MainWindow::closeDashboard);
+    connect(m_backend, &DashboardBackend::fullScreenRequested, this, &MainWindow::toggleDashboardFullScreen);
+    connect(m_backend, &DashboardBackend::connectRequested, m_devicePanel, &DevicePanel::connectVirtual);
+    connect(m_backend, &DashboardBackend::locateRequested, this, [this](int id) {
+#ifdef Q_OS_WASM
+        closeDashboard();   // 浏览器里大屏盖住了编辑器，先关掉
+#endif
+        raise();
+        activateWindow();
+        locateNode(id);
+    });
 
     connect(m_scene, &QGraphicsScene::selectionChanged, this, &MainWindow::onSelectionChanged);
     connect(m_scene, &TopologyScene::message, this, [this](const QString &t) { statusBar()->showMessage(t, 3000); });
@@ -80,6 +108,23 @@ MainWindow::MainWindow(QWidget *parent)
 
     resize(1400, 900);
     QTimer::singleShot(0, this, &MainWindow::startDemo);
+}
+
+MainWindow::~MainWindow()
+{
+    // 场景析构时删除选中的节点会发 selectionChanged，此时 MainWindow 已经析构了一半，先断开
+    disconnect(m_scene, nullptr, this, nullptr);
+    if (m_dashboard) {
+        m_dashboard->disconnect(this);
+        delete m_dashboard;
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // 大屏是独立窗口，不关掉的话主窗口关闭后程序不会退出
+    closeDashboard();
+    QMainWindow::closeEvent(event);
 }
 
 // ---------------------------------------------------------------- 动作/菜单
@@ -168,7 +213,15 @@ void MainWindow::createActions()
     zoom100Act->setShortcut(Qt::Key_1);
     connect(zoom100Act, &QAction::triggered, m_view, &TopologyView::resetZoom);
 
+    m_dashAct = new QAction(QStringLiteral("监控大屏"), this);
+    m_dashAct->setShortcut(Qt::Key_F10);
+    m_dashAct->setCheckable(true);
+    m_dashAct->setToolTip(QStringLiteral("打开 Qt Quick 监控大屏（F10；大屏里 F11 全屏，Esc 关闭）"));
+    connect(m_dashAct, &QAction::triggered, this, [this](bool on) { on ? showDashboard() : closeDashboard(); });
+
     m_viewMenu = menuBar()->addMenu(QStringLiteral("视图(&V)"));
+    m_viewMenu->addAction(m_dashAct);
+    m_viewMenu->addSeparator();
     m_viewMenu->addActions({fitAct, zoom100Act});
     m_viewMenu->addSeparator();
 
@@ -237,6 +290,8 @@ void MainWindow::createActions()
     tb->addAction(resetAct);
     tb->addWidget(menuButton(stressMenu));
     tb->addActions({lodAct, bspAct});
+    tb->addSeparator();
+    tb->addAction(m_dashAct);
 }
 
 void MainWindow::createDocks()
@@ -591,6 +646,77 @@ void MainWindow::updateStats()
         m_props->refresh();
 }
 
+// ---------------------------------------------------------------- 监控大屏
+
+void MainWindow::showDashboard()
+{
+    if (m_dashboard) {
+        m_dashboard->raise();
+        m_dashboard->requestActivate();
+        m_dashAct->setChecked(true);
+        return;
+    }
+    // 打开时才创建 QML 引擎和界面，不拖慢启动（WASM 版尤其明显）。
+    // 用独立窗口而不是嵌进主窗口的 QQuickWidget：WASM 版主窗口一旦含有 QQuickWidget，
+    // 整个窗口改走 GPU 合成，Qt 6.8 在这条路径上局部刷新普通控件会持续报 WebGL 纹理上传错误。
+    m_dashboard = new QQuickView;
+    m_dashboard->setTitle(QStringLiteral("网络运行监控中心"));
+    m_dashboard->setColor(QColor(0x06, 0x0c, 0x18));
+    m_dashboard->setResizeMode(QQuickView::SizeRootObjectToView);
+    m_dashboard->loadFromModule("Topology.Dashboard", "Dashboard");
+    if (m_dashboard->status() == QQuickView::Error) {
+        QStringList lines;
+        for (const QQmlError &e : m_dashboard->errors())
+            lines << e.toString();
+        qWarning().noquote() << "大屏加载失败:" << lines.join(QLatin1Char('\n'));
+        statusBar()->showMessage(QStringLiteral("大屏加载失败，详见控制台输出"), 5000);
+        delete m_dashboard;
+        m_dashboard = nullptr;
+        m_dashAct->setChecked(false);
+        return;
+    }
+    // 用户直接点窗口的关闭按钮时同样走 closeDashboard，释放资源并同步菜单勾选状态
+    connect(m_dashboard, &QWindow::visibleChanged, this, [this](bool visible) {
+        if (!visible)
+            closeDashboard();
+    });
+
+    m_backend->setActive(true);
+    m_dashAct->setChecked(true);
+#ifdef Q_OS_WASM
+    m_dashboard->showFullScreen();   // 填满页面里的 Qt 容器，盖住编辑器
+#else
+    // 在主窗口所在的屏幕上打开；多屏时可以拖到大屏显示器再按 F11
+    m_dashboard->setScreen(screen());
+    m_dashboard->resize(1600, 900);
+    m_dashboard->setPosition(screen()->availableGeometry().center() - QPoint(800, 450));
+    m_dashboard->show();
+#endif
+}
+
+void MainWindow::closeDashboard()
+{
+    m_dashAct->setChecked(false);
+    if (!m_dashboard)
+        return;
+    // 数据和趋势历史在 C++ 后端里，关掉界面不丢；下次打开重新创建
+    QQuickView *view = std::exchange(m_dashboard, nullptr);
+    m_backend->setActive(false);
+    view->disconnect(this);
+    view->deleteLater();
+    activateWindow();
+}
+
+void MainWindow::toggleDashboardFullScreen()
+{
+    if (!m_dashboard)
+        return;
+    if (m_dashboard->visibility() == QWindow::FullScreen)
+        m_dashboard->showNormal();
+    else
+        m_dashboard->showFullScreen();
+}
+
 // ---------------------------------------------------------------- 帮助
 
 void MainWindow::showHelp()
@@ -607,6 +733,7 @@ void MainWindow::showHelp()
         "曲线上滚轮缩放、拖动平移、双击回到实时 · 可注入分包/误码/丢应答/断线故障 · "
         "参数下发页可改设备负载触发告警 · 仪表盘显示选中设备实时读数 · "
         "历史查询页从 SQLite 回放曲线、查看告警、导出 CSV · 桌面版可通过 TCP/串口连接独立模拟器 devsim<br>"
+        "<b>监控大屏</b>：F10 打开 Qt Quick 大屏（独立窗口），大屏里 F11 全屏、Esc 关闭；点告警或设备卡片在拓扑图中定位<br>"
         "<b>监控</b>：断开链路后，空格开关随机告警模拟 · 双击告警日志定位节点<br>"
         "<b>性能</b>：压力测试生成上万节点，开关 LOD / BSP 对比状态栏里的单帧耗时"));
     box->open();
@@ -619,7 +746,7 @@ void MainWindow::showAbout()
     box->setWindowTitle(QStringLiteral("关于"));
     box->setTextFormat(Qt::RichText);
     box->setText(QStringLiteral("<h3>网络拓扑监控</h3>"
-                                "<p>C++17 · Qt %1 · Graphics View · Model/View · QThread · 自定义协议 · SQLite</p>"
+                                "<p>C++17 · Qt %1 · Graphics View · Qt Quick · Model/View · QThread · 自定义协议 · SQLite</p>"
                                 "<p>同一套代码编译桌面版与 WebAssembly 版。</p>")
                      .arg(QString::fromLatin1(qVersion())));
     box->open();

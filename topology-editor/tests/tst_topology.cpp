@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "comm/CommManager.h"
 #include "commands/Commands.h"
 #include "io/TopologyIO.h"
 #include "model/AlarmLogModel.h"
@@ -12,6 +13,8 @@
 #include <QtTest>
 #include <QComboBox>
 #include <QPushButton>
+#include <QQuickItem>
+#include <QQuickView>
 #include <QTabWidget>
 #include <QUndoStack>
 
@@ -226,6 +229,56 @@ private slots:
                 a->trigger();
         QTest::qWait(800);
         QVERIFY(w.grab().save(QStringLiteral(SCREENSHOT_DIR "/screenshot-stress.png")));
+    }
+
+    // 监控大屏：QML 能正常加载、数据绑定生效，并截图
+    void dashboard()
+    {
+        MainWindow w;
+        w.resize(1600, 900);
+        w.show();
+        // 让两台设备负载升高触发告警，大屏上能看到告警卡片和告警流
+        auto *comm = w.findChild<CommManager *>();
+        QVERIFY(comm);
+        QTRY_COMPARE_WITH_TIMEOUT(comm->state(), LinkState::Connected, 3000);
+        comm->writeParam(2, Proto::ParamLoadBias, 60);
+        comm->writeParam(5, Proto::ParamLoadBias, 40);
+        QTest::qWait(4000);
+
+        QAction *dashAct = nullptr;
+        for (QAction *a : w.findChildren<QAction *>())
+            if (a->text() == QStringLiteral("监控大屏"))
+                dashAct = a;
+        QVERIFY(dashAct);
+        dashAct->trigger();
+
+        QQuickView *view = nullptr;
+        for (QWindow *win : QGuiApplication::topLevelWindows())
+            if (auto *v = qobject_cast<QQuickView *>(win))
+                view = v;
+        QVERIFY(view);
+        QCOMPARE(view->status(), QQuickView::Ready);
+        QVERIFY(view->rootObject());
+        QVERIFY(view->isVisible());
+        QTest::qWait(2500);
+        QVERIFY(view->grabWindow().save(QStringLiteral(SCREENSHOT_DIR "/screenshot-dashboard.png")));
+
+        // 关闭大屏：窗口销毁，菜单勾选同步
+        QPointer<QQuickView> guard(view);
+        dashAct->trigger();
+        QTRY_VERIFY(guard.isNull());
+        QVERIFY(!dashAct->isChecked());
+
+        // 直接关窗口（点标题栏的关闭按钮）也一样
+        dashAct->trigger();
+        QVERIFY(dashAct->isChecked());
+        for (QWindow *win : QGuiApplication::topLevelWindows())
+            if (auto *v = qobject_cast<QQuickView *>(win))
+                guard = v;
+        QVERIFY(guard);
+        guard->close();
+        QTRY_VERIFY(guard.isNull());
+        QVERIFY(!dashAct->isChecked());
     }
 };
 

@@ -13,6 +13,8 @@ class CommManager;
 class DeviceMonitor;
 class DevicePanel;
 class HistoryManager;
+class DashboardBackend;
+class QQuickView;
 enum class LinkState;
 class QUndoStack;
 class QLabel;
@@ -25,6 +27,10 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
 
 private:
     void createActions();
@@ -51,6 +57,11 @@ private:
     void afterRebuild();
     QList<int> virtualDeviceIds() const;
 
+    // 监控大屏：独立的 Qt Quick 窗口（桌面版可以拖到第二块屏幕全屏），关闭即销毁
+    void showDashboard();
+    void closeDashboard();
+    void toggleDashboardFullScreen();
+
     QUndoStack *m_undo;
     TopologyScene *m_scene;
     TopologyView *m_view;
@@ -63,6 +74,9 @@ private:
     DeviceMonitor *m_monitor = nullptr;
     DevicePanel *m_devicePanel = nullptr;
     HistoryManager *m_history = nullptr;
+    DashboardBackend *m_backend = nullptr;
+    QQuickView *m_dashboard = nullptr;
+    QAction *m_dashAct = nullptr;
 
     QActionGroup *m_modeGroup = nullptr;
     QComboBox *m_typeCombo = nullptr;

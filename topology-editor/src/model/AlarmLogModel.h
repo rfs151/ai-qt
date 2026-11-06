@@ -24,6 +24,11 @@ public:
     enum Column { ColTime, ColNode, ColLevel, ColText, ColCount };
     static constexpr int NodeIdRole = Qt::UserRole + 1;
     static constexpr int LevelRole = Qt::UserRole + 2;
+    // 以下角色给 QML 的 ListView 用（只取第 0 列）
+    static constexpr int TimeTextRole = Qt::UserRole + 3;
+    static constexpr int NodeNameRole = Qt::UserRole + 4;
+    static constexpr int LevelNameRole = Qt::UserRole + 5;
+    static constexpr int TextRole = Qt::UserRole + 6;
     static constexpr int kMaxRows = 2000;
 
     using QAbstractTableModel::QAbstractTableModel;
@@ -35,6 +40,7 @@ public:
     int columnCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
 
 private:
     QVector<AlarmEvent> m_rows;   // 最新的在前

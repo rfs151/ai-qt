@@ -20,7 +20,7 @@ for hi in range(0xB0, 0xD8):
             pass
 
 for path in src_dir.rglob("*"):
-    if path.suffix in {".cpp", ".h"}:
+    if path.suffix in {".cpp", ".h", ".qml"}:
         chars.update(path.read_text(encoding="utf-8"))
 
 chars = sorted(c for c in chars if c.isprintable())

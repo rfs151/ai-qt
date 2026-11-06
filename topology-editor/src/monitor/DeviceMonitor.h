@@ -32,6 +32,8 @@ public:
     const Thresholds &thresholds() const { return m_th; }
     const Sample *latest(int deviceId) const;
     int onlineCount() const;
+    QList<int> deviceIds() const;   // 收到过数据的设备，按 id 排序
+    bool isOnline(int deviceId) const;
 
     void onSamples(const QVector<Sample> &batch);
     // 拓扑重建或用户主动断开：清空状态。restoreNormal 为 true 时把受监控的节点恢复为正常

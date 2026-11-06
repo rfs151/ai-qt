@@ -25,6 +25,19 @@ int DeviceMonitor::onlineCount() const
     return int(std::count_if(m_devs.cbegin(), m_devs.cend(), [](const DevState &d) { return d.online; }));
 }
 
+QList<int> DeviceMonitor::deviceIds() const
+{
+    QList<int> ids = m_devs.keys();
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+bool DeviceMonitor::isOnline(int deviceId) const
+{
+    auto it = m_devs.constFind(deviceId);
+    return it != m_devs.cend() && it->online;
+}
+
 NodeStatus DeviceMonitor::evaluate(const Sample &s, NodeStatus current, QString *reason) const
 {
     const float h = m_th.hysteresis;

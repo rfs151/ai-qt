@@ -4,7 +4,7 @@ project(TopologyEditor VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Sql)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Widgets Sql Quick)
 if(NOT EMSCRIPTEN)
     # 浏览器里没有串口和原生 TCP，WASM 版只用虚拟设备
     find_package(Qt6 6.5 OPTIONAL_COMPONENTS Network SerialPort)
@@ -40,7 +40,6 @@ target_link_libraries(history_core PUBLIC comm_core Qt6::Sql)
 
 # 业务代码编成静态库，应用和单元测试共用
 qt_add_library(topology_core STATIC
-    src/MainWindow.h            src/MainWindow.cpp
     src/TopologyTypes.h         src/TopologyTypes.cpp
     src/scene/NodeItem.h        src/scene/NodeItem.cpp
     src/scene/EdgeItem.h        src/scene/EdgeItem.cpp
@@ -61,8 +60,17 @@ qt_add_library(topology_core STATIC
 target_include_directories(topology_core PUBLIC src)
 target_link_libraries(topology_core PUBLIC Qt6::Widgets comm_core history_core)
 
+# 监控大屏（Qt Quick）
+add_subdirectory(src/dashboard)
+
+# 主窗口：装配 Widgets 编辑器和 QML 大屏
+qt_add_library(app_core STATIC
+    src/MainWindow.h            src/MainWindow.cpp
+)
+target_link_libraries(app_core PUBLIC topology_core dashboard dashboardplugin)
+
 qt_add_executable(topology WIN32 MACOSX_BUNDLE src/main.cpp)
-target_link_libraries(topology PRIVATE topology_core)
+target_link_libraries(topology PRIVATE app_core)
 
 # 中文字体子集（scripts/make-font.sh 生成）。WASM 没有系统字体，必须打包进 qrc。
 set(EMBED_FONT ${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/NotoSansSC-subset.otf)

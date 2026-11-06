@@ -52,6 +52,18 @@ QVariant AlarmLogModel::headerData(int section, Qt::Orientation orientation, int
     return {};
 }
 
+QHash<int, QByteArray> AlarmLogModel::roleNames() const
+{
+    QHash<int, QByteArray> r = QAbstractTableModel::roleNames();
+    r.insert(NodeIdRole, "nodeId");
+    r.insert(LevelRole, "level");
+    r.insert(TimeTextRole, "timeText");
+    r.insert(NodeNameRole, "nodeName");
+    r.insert(LevelNameRole, "levelName");
+    r.insert(TextRole, "text");
+    return r;
+}
+
 QVariant AlarmLogModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid())
@@ -75,6 +87,14 @@ QVariant AlarmLogModel::data(const QModelIndex &index, int role) const
         return e.nodeId;
     case LevelRole:
         return int(e.level);
+    case TimeTextRole:
+        return e.time.toString(QStringLiteral("HH:mm:ss"));
+    case NodeNameRole:
+        return e.nodeName;
+    case LevelNameRole:
+        return statusName(e.level);
+    case TextRole:
+        return e.text;
     }
     return {};
 }

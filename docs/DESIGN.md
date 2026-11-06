@@ -25,7 +25,7 @@
 | Qt 6.8 LTS + 单线程 wasm | 多线程版需要 COOP/COEP 响应头，单线程版部署简单，任何静态托管都能跑 |
 | 编译环境放进 Docker | 本机和 VPS 都不用装 Qt/emsdk，版本固定（emsdk 必须和 Qt 版本严格匹配） |
 | 在本机构建镜像，传到 VPS | 小内存 VPS 下载 Qt 工具链（约 3GB）并编译比较吃力；`deploy.sh` 用 `docker save | ssh docker load` 传输 |
-| nginx gzip_static | wasm 约 15MB，gzip 预压缩后约 5.7MB，不消耗 VPS CPU |
+| nginx gzip_static | wasm 约 26MB（含 Qt Quick），gzip 预压缩后约 9.8MB，不消耗 VPS CPU |
 | 中文字体子集打包进 qrc | WASM 没有系统字体；只保留 GB2312 一级常用字 + 源码用到的字，体积约 1MB |
 
 ## 3. 演示项目：网络拓扑编辑器 / 监控台
@@ -52,8 +52,13 @@ topology-editor/src
 │   └── AlarmLogModel        告警日志，配合 QSortFilterProxyModel 过滤
 ├── sim/
 │   └── AlarmSimulator       QTimer 驱动状态变化，批量提交
-└── io/
-    └── TopologyIO           QJsonDocument 导入导出；WASM 用 getOpenFileContent/saveFileContent
+├── io/
+│   └── TopologyIO           QJsonDocument 导入导出；WASM 用 getOpenFileContent/saveFileContent
+└── dashboard/               QML 模块 Topology.Dashboard（监控大屏）
+    ├── DashboardBackend     QML 单例：汇总拓扑/监控/通信数据，暴露为属性
+    ├── DeviceListModel      设备卡片的 QAbstractListModel
+    ├── TrendItem            自定义 QQuickItem，直接生成 Scene Graph 几何体画曲线
+    └── *.qml                Dashboard 主界面 + Panel/KpiCard/RingGauge/StatusDonut/TrendChart/AlarmFeed/DeviceCard
 ```
 
 ### 3.2 技术要点（展示页上逐条讲解）
@@ -106,6 +111,16 @@ QSerialPort ─> devsim     ┘    心跳超时/指数退避重连、写参数�
 - **从站**（`ModbusSlaveSim`）：支持 FC03/04/06/16，返回异常码 01/02/03；FC16 先整体校验再写入；RTU 下不存在的地址和广播不应答，TCP 网关对不存在的单元返回 0x0B。
 - **接入方式**：虚拟设备（RTU）、串口（RTU）、TCP（Modbus TCP）；`devsim --modbus --tcp 1502` 或 `--serial` 作为外部从站。
 - **界面**：协议切换、从站范围与轮询周期；“寄存器”页显示选中从站的原始寄存器和工程值；报文监视按从站/功能码解码；参数下发映射为写保持寄存器。
+
+### 3.6 Qt Quick 监控大屏
+
+- **为什么用 QML**：编辑器是典型的工具界面，Widgets 更合适；大屏要动画、自适应缩放、GPU 渲染，交给 Qt Quick。两边共用同一个 `DeviceMonitor` / `CommManager`，大屏只是另一种视图。
+- **C++ → QML**：`DashboardBackend` 需要注入依赖，不能由 QML 创建，用 `QML_SINGLETON` + 静态 `create()` 返回已有实例并设为 `CppOwnership`，QML 里直接写 `Backend.avgCpu`。KPI 共用一个 `statsChanged` 通知，避免几十个信号；设备列表是 `QAbstractListModel`，设备集合不变时只发一次 `dataChanged`，GridView 不重建委托。
+- **刷新节奏**：后端每秒采一次趋势点（平均/最高 CPU、汇总入/出流量，保留 120 点），大屏关闭时也在采；KPI、卡片只在大屏打开时计算和通知。卡片上的迷你曲线从 `TelemetryStore` 取最近 60 秒，分 30 段取最大值，尖峰不会被平均掉。
+- **TrendItem**：在 `updatePaintNode` 里生成顶点数据，不经过 QPainter 或 Canvas（Canvas 每次重绘都在 JS 里跑）。折线每个点沿法线挤出 4 个顶点（外羽化、内、内、外羽化），内侧不透明、外侧透明，相当于 1px 的解析抗锯齿，不依赖 MSAA；拐角按斜接长度放大并限幅。填充是三角带，顶点色从曲线处的填充色渐变到底边透明。软件渲染后端不支持自定义几何体，检测到后改用 `QSGRenderNode` + QPainter（注意裁剪区域要在 `setTransform` 之前设置）。
+- **环形仪表 / 环图**：Qt Quick Shapes + `CurveRenderer`（GPU 上解析绘制曲线，缩放不失真）。Qt 6.8 的 CurveRenderer 有两个问题，在 WebGL 下实测：首帧前（布局还在定尺寸时）路径属性的变化会丢失，超过 180° 的单段弧画不出来。所以圆弧固定画在 200×200 坐标系里，用 `scale` 缩放到控件大小，并拆成两段弧。
+- **独立窗口**：大屏是 `QQuickView`，不是嵌在主窗口里的 `QQuickWidget`。WASM 版主窗口一旦含有 QQuickWidget 就整体改走 GPU 合成，Qt 6.8 在这条路径上局部刷新普通控件会持续报 WebGL 纹理上传错误，即使销毁 QQuickWidget 也回不去。独立窗口在桌面上还可以拖到第二块屏幕全屏。打开时才创建 QML 引擎，关闭即销毁。
+- **工程**：`qt_add_qml_module` 静态库 + `Q_IMPORT_QML_PLUGIN`；QML 文件经 qmlcachegen 预编译；`Theme.qml` 单例统一颜色和缩放系数（以 1600×900 为基准）；qmllint 零警告；不引入 Qt Quick Controls，控件自绘，WASM 包更小。
 
 ## 4. 目录结构
 
